@@ -1,0 +1,69 @@
+```yaml
+name: Build RiRiRawrZ615 Kernel for LGE MSM8996
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev \
+          bison flex git gcc-aarch64-linux-gnu python3 python3-pip zip unzip
+        pip3 install kconfiglib
+
+    - name: Install Android NDK
+      uses: android-actions/setup-android@v3
+      with:
+        cmdline-tools-version: '9477386'
+
+    - name: Set up toolchain
+      run: |
+        export ANDROID_HOME=$HOME/android-sdk
+        export ANDROID_NDK_HOME=$ANDROID_HOME/ndk-bundle
+        export PATH=$ANDROID_NDK_HOME/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin:$PATH
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CROSS_COMPILE=aarch64-linux-android-
+
+    - name: Clean build directory
+      run: |
+        make mrproper
+        mkdir -p build
+
+    - name: Configure kernel
+      run: |
+        # Check for custom defconfig, fallback to lineageos_msm8996_defconfig
+        DEFCONFIG=$(ls arch/arm64/configs/*_defconfig | grep -E 'lineageos_msm8996_defconfig|ksun|sufs' || echo "arch/arm64/configs/lineageos_msm8996_defconfig")
+        make O=build ${DEFCONFIG##*/}
+
+    - name: Build kernel
+      run: |
+        make O=build -j$(nproc --all)
+
+    - name: Package kernel
+      run: |
+        mkdir -p artifacts
+        cp build/arch/arm64/boot/Image.gz-dtb artifacts/ || echo "Warning: Image.gz-dtb not found"
+        if [ -f build/arch/arm64/boot/Image.gz-dtb ]; then
+          zip -r kernel-artifacts.zip artifacts/
+        else
+          echo "Kernel image not found, build may have failed."
+          exit 1
+        fi
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-artifacts
+        path: kernel-artifacts.zip
+```
