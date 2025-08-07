@@ -46,7 +46,7 @@ jobs:
 
     - name: Clean build directory
       run: |
-        make mrproper
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- mrproper
         mkdir -p build
 
     - name: Download KernelSU-Next
@@ -67,7 +67,7 @@ jobs:
         DEFCONFIG=${{ github.event.inputs.defconfig }}
         if [ -f "arch/arm64/configs/$DEFCONFIG" ]; then
           echo "Using defconfig: $DEFCONFIG"
-          make O=build $DEFCONFIG
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=build $DEFCONFIG
         else
           echo "Error: Defconfig $DEFCONFIG not found in arch/arm64/configs/"
           echo "Available defconfigs:"
@@ -76,7 +76,7 @@ jobs:
           if [ -n "$AVAILABLE_DEFCONFIG" ]; then
             DEFCONFIG=$(basename "$AVAILABLE_DEFCONFIG")
             echo "Falling back to default defconfig: $DEFCONFIG"
-            make O=build $DEFCONFIG
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=build $DEFCONFIG
           else
             echo "No valid defconfig found, build cannot proceed"
             exit 1
@@ -87,7 +87,7 @@ jobs:
 
     - name: Build kernel
       run: |
-        make O=build -j$(nproc --all)
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=build -j$(nproc --all)
 
     - name: Package kernel
       run: |
