@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest  # Updated from ubuntu-20.04 for better compatibility
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout source
@@ -21,7 +21,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        set -x  # Enable command echoing for debugging
+        set -x
         sudo apt-get update
         sudo apt-get install -y \
           bc \
@@ -30,10 +30,10 @@ jobs:
           ccache \
           flex \
           gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
           libssl-dev \
           make \
-          zip
+          zip \
+          android-sdk-ndk-bundle
         echo "Dependencies installed successfully"
 
     - name: Prepare output dir
@@ -46,24 +46,26 @@ jobs:
     - name: Clean kernel source
       run: |
         set -x
-        make ARCH=arm64 mrproper && echo "Kernel source cleaned" || echo "Clean failed"
+        make ARCH=arm64 mrproper && echo "Kernel source cleaned" || { echo "Clean failed"; exit 1; }
 
     - name: Configure kernel (msm-perf_defconfig)
       run: |
         set -x
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build msm-perf_defconfig V=1 && echo "Kernel configured" || { echo "Configuration failed"; exit 1; }
+        export CROSS_COMPILE=aarch64-linux-android-
+        make ARCH=arm64 O=build msm-perf_defconfig V=1 && echo "Kernel configured" || { echo "Configuration failed"; exit 1; }
 
     - name: Build kernel
       run: |
         set -x
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build -j$(nproc --all) V=1 && echo "Kernel built successfully" || { echo "Build failed"; exit 1; }
+        export CROSS_COMPILE=aarch64-linux-android-
+        make ARCH=arm64 O=build -j$(nproc --all) V=1 && echo "Kernel built successfully" || { echo "Build failed"; exit 1; }
 
     - name: Package Image
       run: |
         set -x
         mkdir -p out
-        cp build/arch/arm64/boot/Image.gz-dtb out/ || echo "Warning: Image.gz-dtb not copied (may not exist)"
-        if [ -f out/Image.gz-dtb ]; then
+        if [ -f build/arch/arm64/boot/Image.gz-dtb ]; then
+          cp build/arch/arm64/boot/Image.gz-dtb out/
           cd out
           zip -r9 kernel.zip . && echo "Kernel packaged successfully" || { echo "Packaging failed"; exit 1; }
         else
@@ -72,8 +74,8 @@ jobs:
         fi
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: kernel
         path: out/kernel.zip
-        if-no-files-found: error  # Fail if no artifact is generated
+        if-no-files-found: error
