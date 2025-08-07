@@ -7,10 +7,6 @@ on:
         description: 'Branch to build'
         required: true
         default: 'lineage-22.1'
-      defconfig:
-        description: 'Kernel defconfig to use'
-        required: true
-        default: 'msm-perf_defconfig'
 
 jobs:
   build:
@@ -30,23 +26,11 @@ jobs:
           bison flex git gcc-aarch64-linux-gnu python3 python3-pip zip unzip patch
         pip3 install kconfiglib
 
-    - name: Install Android NDK
-      uses: android-actions/setup-android@v3
-      with:
-        cmdline-tools-version: '9477386'
-
-    - name: Set up toolchain
+    - name: Clean kernel source
       run: |
-        export ANDROID_HOME=$HOME/android-sdk
-        export ANDROID_NDK_HOME=$ANDROID_HOME/ndk-bundle
-        export PATH=$ANDROID_NDK_HOME/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin:$PATH
         export ARCH=arm64
-        export SUBARCH=arm64
-        export CROSS_COMPILE=aarch64-linux-android-
-
-    - name: Clean build directory
-      run: |
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- mrproper
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE mrproper
         mkdir -p build
 
     - name: Download KernelSU-Next
@@ -64,30 +48,20 @@ jobs:
 
     - name: Configure kernel
       run: |
-        DEFCONFIG=${{ github.event.inputs.defconfig }}
+        DEFCONFIG=msm-perf_defconfig
         if [ -f "arch/arm64/configs/$DEFCONFIG" ]; then
           echo "Using defconfig: $DEFCONFIG"
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=build $DEFCONFIG
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build $DEFCONFIG
         else
-          echo "Error: Defconfig $DEFCONFIG not found in arch/arm64/configs/"
-          echo "Available defconfigs:"
-          ls -1 arch/arm64/configs/*_defconfig || echo "No defconfigs found"
-          AVAILABLE_DEFCONFIG=$(ls arch/arm64/configs/*_defconfig 2>/dev/null | head -n 1)
-          if [ -n "$AVAILABLE_DEFCONFIG" ]; then
-            DEFCONFIG=$(basename "$AVAILABLE_DEFCONFIG")
-            echo "Falling back to default defconfig: $DEFCONFIG"
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=build $DEFCONFIG
-          else
-            echo "No valid defconfig found, build cannot proceed"
-            exit 1
-          fi
+          echo "Error: $DEFCONFIG not found!"
+          exit 1
         fi
         scripts/config --file build/.config --enable CONFIG_KSU
         scripts/config --file build/.config --enable CONFIG_KSU_WITH_VFS_HOOKS
 
     - name: Build kernel
       run: |
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=build -j$(nproc --all)
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build -j$(nproc --all)
 
     - name: Package kernel
       run: |
