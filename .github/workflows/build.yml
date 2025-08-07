@@ -1,4 +1,4 @@
-name: Automated Build RiRiRawrZ615 Kernel for LGE MSM8996 with KernelSU-Next and SUSFS (4.4)
+name: Automated Build RiRiRawrZ615 Kernel for LGE MSM8996 with KernelSU-Next (4.4)
 
 on:
   workflow_dispatch:
@@ -52,69 +52,24 @@ jobs:
     - name: Download KernelSU-Next
       run: |
         git clone --branch next https://github.com/KernelSU-Next/KernelSU-Next.git
-        cd KernelSU-Next/kernel
+        cd KernelSU-Next
         git checkout next
-        cd ../..
-
-    - name: Download SUSFS4KSU
-      run: |
-        git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu_temp
-        cd susfs4ksu_temp
-        # Find oldest tag or branch compatible with 4.4
-        OLDEST_TAG=$(git tag | sort -V | head -n 1) || git checkout main
-        git checkout $OLDEST_TAG 2>/dev/null || git checkout main
         cd ..
-        mv susfs4ksu_temp susfs4ksu
 
-    - name: Prepare patch directories
+    - name: Apply KernelSU-Next configuration for 4.4
       run: |
-        mkdir -p kernel_patches/ksu kernel_patches/susfs
-        cp KernelSU-Next/kernel/*.patch kernel_patches/ksu/
-        cp susfs4ksu/*.patch kernel_patches/susfs/ 2>/dev/null || echo "No SUSFS patches found, proceeding with manual config"
-
-    - name: Automate KernelSU-Next patching for 4.4
-      run: |
-        cd kernel_patches/ksu
-        for patch in *.patch; do
-          if ! grep -q "5\." "$patch"; then
-            git -C ../.. apply "$patch" || {
-              echo "Attempting backport for $patch"
-              git -C ../.. apply --3way "$patch" || {
-                echo "Backport failed for $patch, skipping"
-                continue
-              }
-            }
-          else
-            echo "Skipping $patch (5.x+ incompatible)"
-          fi
-        done
-        cd ../..
-
-    - name: Automate SUSFS4KSU patching for 4.4
-      run: |
-        if [ -d "kernel_patches/susfs" ]; then
-          cd kernel_patches/susfs
-          for patch in *.patch; do
-            git -C ../.. apply --3way "$patch" || {
-              echo "Warning: $patch failed, attempting partial apply with rejects"
-              git -C ../.. apply --reject "$patch" && echo "Applied with rejects, manual review needed" || echo "Patch $patch failed, skipping"
-            }
-          done
-          cd ../..
-        else
-          echo "Warning: No SUSFS4KSU patches available, SUSFS support disabled"
-        fi
+        echo "Applying KernelSU-Next configuration for 4.4 pre-GKI"
+        scripts/config --enable CONFIG_KSU
+        scripts/config --enable CONFIG_KSU_WITH_VFS_HOOKS
 
     - name: Configure kernel
       run: |
         DEFCONFIG=${{ github.event.inputs.defconfig }}
         if [ -f "arch/arm64/configs/$DEFCONFIG" ]; then
           make O=build $DEFCONFIG
-          # Enable KernelSU-Next with VFS hooks for 4.4
+          # Ensure KernelSU is enabled
           scripts/config --file build/.config --enable CONFIG_KSU
           scripts/config --file build/.config --enable CONFIG_KSU_WITH_VFS_HOOKS
-          # Attempt SUSFS, warn if unsupported
-          scripts/config --file build/.config --enable CONFIG_SUSFS || echo "Warning: CONFIG_SUSFS not supported, ensure patches applied"
         else
           echo "Error: Defconfig $DEFCONFIG not found in arch/arm64/configs/"
           exit 1
