@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest  # Updated from ubuntu-20.04 for better compatibility
 
     steps:
     - name: Checkout source
@@ -21,6 +21,7 @@ jobs:
 
     - name: Install dependencies
       run: |
+        set -x  # Enable command echoing for debugging
         sudo apt-get update
         sudo apt-get install -y \
           bc \
@@ -33,33 +34,46 @@ jobs:
           libssl-dev \
           make \
           zip
+        echo "Dependencies installed successfully"
 
     - name: Prepare output dir
       run: |
+        set -x
         rm -rf build
         mkdir build
+        echo "Output directory prepared"
 
     - name: Clean kernel source
       run: |
-        make ARCH=arm64 mrproper
+        set -x
+        make ARCH=arm64 mrproper && echo "Kernel source cleaned" || echo "Clean failed"
 
     - name: Configure kernel (msm-perf_defconfig)
       run: |
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build msm-perf_defconfig
+        set -x
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build msm-perf_defconfig V=1 && echo "Kernel configured" || { echo "Configuration failed"; exit 1; }
 
     - name: Build kernel
       run: |
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build -j$(nproc --all)
+        set -x
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build -j$(nproc --all) V=1 && echo "Kernel built successfully" || { echo "Build failed"; exit 1; }
 
     - name: Package Image
       run: |
+        set -x
         mkdir -p out
-        cp build/arch/arm64/boot/Image.gz-dtb out/ || true
-        cd out
-        zip -r9 kernel.zip . || true
+        cp build/arch/arm64/boot/Image.gz-dtb out/ || echo "Warning: Image.gz-dtb not copied (may not exist)"
+        if [ -f out/Image.gz-dtb ]; then
+          cd out
+          zip -r9 kernel.zip . && echo "Kernel packaged successfully" || { echo "Packaging failed"; exit 1; }
+        else
+          echo "Error: Image.gz-dtb not found, packaging skipped"
+          exit 1
+        fi
 
     - name: Upload artifact
       uses: actions/upload-artifact@v3
       with:
         name: kernel
         path: out/kernel.zip
+        if-no-files-found: error  # Fail if no artifact is generated
