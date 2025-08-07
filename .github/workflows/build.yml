@@ -1,8 +1,16 @@
-```yaml
-name: Build RiRiRawrZ615 Kernel for LGE MSM8996
+name: Build RiRiRawrZ615 Kernel for LGE MSM8996 with KernelSU and SUSFS
 
 on:
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'lineage-18.1'
+      defconfig:
+        description: 'Kernel defconfig to use'
+        required: true
+        default: 'lineageos_msm8996_defconfig'
 
 jobs:
   build:
@@ -12,6 +20,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
+        ref: ${{ github.event.inputs.branch }}
         fetch-depth: 0
 
     - name: Set up build environment
@@ -35,6 +44,21 @@ jobs:
         export SUBARCH=arm64
         export CROSS_COMPILE=aarch64-linux-android-
 
+    - name: Clone KernelSU
+      run: |
+        git clone https://github.com/tiann/KernelSU.git
+        cd KernelSU
+        git checkout main
+        cd ..
+
+    - name: Apply KernelSU patches
+      run: |
+        for patch in KernelSU/kernel/*.patch; do
+          if [ -f "$patch" ]; then
+            git apply "$patch" || echo "Warning: Failed to apply $patch"
+          fi
+        done
+
     - name: Clean build directory
       run: |
         make mrproper
@@ -42,9 +66,16 @@ jobs:
 
     - name: Configure kernel
       run: |
-        # Check for custom defconfig, fallback to lineageos_msm8996_defconfig
-        DEFCONFIG=$(ls arch/arm64/configs/*_defconfig | grep -E 'lineageos_msm8996_defconfig|ksun|sufs' || echo "arch/arm64/configs/lineageos_msm8996_defconfig")
-        make O=build ${DEFCONFIG##*/}
+        DEFCONFIG=${{ github.event.inputs.defconfig }}
+        if [ -f "arch/arm64/configs/$DEFCONFIG" ]; then
+          make O=build $DEFCONFIG
+        else
+          echo "Error: Defconfig $DEFCONFIG not found in arch/arm64/configs/"
+          exit 1
+        fi
+        # Enable KernelSU and SUSFS if not already enabled
+        scripts/config --file build/.config --enable CONFIG_KSU
+        scripts/config --file build/.config --enable CONFIG_SUSFS || echo "Warning: CONFIG_SUSFS not supported, skipping"
 
     - name: Build kernel
       run: |
@@ -66,4 +97,3 @@ jobs:
       with:
         name: kernel-artifacts
         path: kernel-artifacts.zip
-```
