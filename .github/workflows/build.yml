@@ -66,14 +66,26 @@ jobs:
       run: |
         DEFCONFIG=${{ github.event.inputs.defconfig }}
         if [ -f "arch/arm64/configs/$DEFCONFIG" ]; then
+          echo "Using defconfig: $DEFCONFIG"
           make O=build $DEFCONFIG
-          # Ensure KernelSU is enabled
-          scripts/config --file build/.config --enable CONFIG_KSU
-          scripts/config --file build/.config --enable CONFIG_KSU_WITH_VFS_HOOKS
         else
           echo "Error: Defconfig $DEFCONFIG not found in arch/arm64/configs/"
-          exit 1
+          echo "Available defconfigs:"
+          ls -1 arch/arm64/configs/*_defconfig || echo "No defconfigs found"
+          # Fallback to first available defconfig if any exist
+          AVAILABLE_DEFCONFIG=$(ls arch/arm64/configs/*_defconfig 2>/dev/null | head -n 1)
+          if [ -n "$AVAILABLE_DEFCONFIG" ]; then
+            DEFCONFIG=$(basename "$AVAILABLE_DEFCONFIG")
+            echo "Falling back to default defconfig: $DEFCONFIG"
+            make O=build $DEFCONFIG
+          else
+            echo "No valid defconfig found, build cannot proceed"
+            exit 1
+          fi
         fi
+        # Ensure KernelSU is enabled
+        scripts/config --file build/.config --enable CONFIG_KSU
+        scripts/config --file build/.config --enable CONFIG_KSU_WITH_VFS_HOOKS
 
     - name: Build kernel
       run: |
