@@ -1,248 +1,65 @@
-name: CI - Build RiRiRawrZ615 Kernel (msm-perf_defconfig, KernelSU-Next, msm8996)
+name: Build Kernel
 
 on:
-  workflow_dispatch:
-    inputs:
-      branch:
-        description: 'Branch to build'
-        required: true
-        default: 'lineage-22.1'
-      defconfig:
-        description: 'Kernel defconfig to use (optional override)'
-        required: true
-        default: 'msm-perf_defconfig'
-      toolchain_url:
-        description: 'Optional: URL to a prebuilt toolchain tarball (provides aarch64-linux-android- prefix).'
-        required: false
-        default: ''
+  workflow_dispatch: # manual run
+  push:
+    branches:
+      - lineage-22.1
+  pull_request:
+    branches:
+      - lineage-22.1
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    env:
-      ARCH: arm64
-      SUBARCH: arm64
-      # default to linaro toolchain prefix; script may override to android toolchain if found
-      DEFAULT_CROSS: aarch64-linux-gnu-
-      OUT_DIR: build
+    runs-on: ubuntu-20.04
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - name: Checkout source
+      uses: actions/checkout@v3
       with:
-        ref: ${{ github.event.inputs.branch }}
         fetch-depth: 0
 
-    - name: Install system deps
+    - name: Install dependencies
       run: |
-        sudo apt-get update -y
-        sudo apt-get install -y --no-install-recommends \
-          build-essential bc libncurses5-dev libssl-dev bison flex git \
-          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-          ccache wget unzip zip patch python3 python3-pip
-        pip3 install kconfiglib || true
+        sudo apt-get update
+        sudo apt-get install -y \
+          bc \
+          bison \
+          build-essential \
+          ccache \
+          flex \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          libssl-dev \
+          make \
+          zip
 
-    - name: Optional: download custom toolchain (if TOOLCHAIN_URL provided)
-      if: ${{ inputs.toolchain_url != '' }}
+    - name: Prepare output dir
       run: |
-        echo "Downloading custom toolchain from ${{ inputs.toolchain_url }} ..."
-        TMPDIR=$(mktemp -d)
-        wget -qO "$TMPDIR/toolchain.tar.xz" "${{ inputs.toolchain_url }}" || wget -qO "$TMPDIR/toolchain.tar.gz" "${{ inputs.toolchain_url }}"
-        if [ -f "$TMPDIR/toolchain.tar.xz" ] || [ -f "$TMPDIR/toolchain.tar.gz" ]; then
-          sudo mkdir -p /opt/custom-toolchain
-          sudo tar -xJf "$TMPDIR/toolchain.tar.xz" -C /opt/custom-toolchain 2>/dev/null || sudo tar -xzf "$TMPDIR/toolchain.tar.gz" -C /opt/custom-toolchain
-          # try to find a bin dir and prepend to PATH
-          TOOL_BIN=$(find /opt/custom-toolchain -type d -name bin | head -n 1)
-          echo "Custom toolchain bin: $TOOL_BIN"
-          echo "/opt/custom-toolchain/bin" | sudo tee -a /etc/environment >/dev/null || true
-          export PATH="$TOOL_BIN:$PATH"
-        else
-          echo "Toolchain download failed or unknown archive format; continuing with system toolchain"
-        fi
+        rm -rf build
+        mkdir build
 
-    - name: Detect and set CROSS_COMPILE
-      id: detect-toolchain
+    - name: Clean kernel source
       run: |
-        set -e
-        # prefer Android gcc prefix if available
-        if command -v aarch64-linux-android-gcc >/dev/null 2>&1; then
-          echo "Found Android GCC in PATH: aarch64-linux-android-"
-          echo "cross_prefix=aarch64-linux-android-" >> $GITHUB_OUTPUT
-        elif [ -d "/opt/custom-toolchain" ] && command -v /opt/custom-toolchain/*/bin/aarch64-linux-android-gcc >/dev/null 2>&1; then
-          TC=$(ls -d /opt/custom-toolchain/*/bin | head -n1)
-          echo "Found custom toolchain at $TC"
-          echo "cross_prefix=aarch64-linux-android-" >> $GITHUB_OUTPUT
-          echo "PATH=$TC:$PATH" >> $GITHUB_ENV
-        elif command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-          echo "Found Linaro/system package gcc: aarch64-linux-gnu- (defaulting to this)"
-          echo "cross_prefix=aarch64-linux-gnu-" >> $GITHUB_OUTPUT
-        else
-          # Ensure linaro package is installed and available
-          echo "No suitable cross compiler found in PATH; trying to install gcc-aarch64-linux-gnu..."
-          sudo apt-get update -y
-          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-          if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-            echo "Installed aarch64-linux-gnu- successfully."
-            echo "cross_prefix=aarch64-linux-gnu-" >> $GITHUB_OUTPUT
-          else
-            echo "ERROR: Could not install or find a cross compiler. Set toolchain_url input or ensure toolchain available."
-            exit 1
-          fi
-        fi
+        make ARCH=arm64 mrproper
 
-    - name: Export CROSS_COMPILE
+    - name: Configure kernel (msm-perf_defconfig)
       run: |
-        echo "CROSS_COMPILE=${{ steps.detect-toolchain.outputs.cross_prefix }}" >> $GITHUB_ENV
-        echo "Using CROSS_COMPILE=${{ steps.detect-toolchain.outputs.cross_prefix }}"
-        echo "ARCH=${{ env.ARCH }}" >> $GITHUB_ENV
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build msm-perf_defconfig
 
-    - name: Verify cross-compiler
+    - name: Build kernel
       run: |
-        set -e
-        echo "PATH: $PATH"
-        echo "Checking compiler binaries for: $CROSS_COMPILE"
-        which "${CROSS_COMPILE}gcc" || true
-        "${CROSS_COMPILE}gcc" --version || true
-        # check binutils ld
-        which "${CROSS_COMPILE}ld" || true
-        "${CROSS_COMPILE}ld" --version || true
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=build -j$(nproc --all)
 
-    - name: Ensure clean source + out-of-tree build dir
+    - name: Package Image
       run: |
-        set -e
-        echo "Running git clean and make mrproper to ensure source is pristine"
-        # remove generated artifacts from workspace (careful: this will remove untracked files)
-        git clean -fdx || true
-        # ensure any leftover configs are removed in source tree
-        make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE mrproper || true
-        # remove out dir if exists (avoid stale objects)
-        rm -rf $OUT_DIR
-        mkdir -p $OUT_DIR
+        mkdir -p out
+        cp build/arch/arm64/boot/Image.gz-dtb out/ || true
+        cd out
+        zip -r9 kernel.zip . || true
 
-    - name: Download KernelSU-Next
-      run: |
-        # shallow clone not used; we want the next branch content
-        git clone --branch next --single-branch https://github.com/KernelSU-Next/KernelSU-Next.git || true
-        # nothing else required here; KernelSU config toggles done via scripts/config
-
-    - name: Ensure scripts/config exists (kconfig-frontends fallback)
-      run: |
-        if [ ! -x scripts/config ]; then
-          echo "scripts/config missing or not executable — trying to build kconfig tools"
-          make -C scripts/kconfig || true
-        fi
-        if [ ! -x scripts/config ]; then
-          echo "Warning: scripts/config still missing. Some config tweaks may fail."
-        fi
-
-    - name: Apply KernelSU-Next config flags (idempotent)
-      run: |
-        set -e
-        # Enable KSU options in source .config (we will apply to O=build/.config as well later)
-        scripts/config --enable CONFIG_KSU || true
-        scripts/config --enable CONFIG_KSU_WITH_VFS_HOOKS || true
-
-    - name: Prepare defconfig (with robust handling & retries)
-      run: |
-        set -e
-        DEF=${{ inputs.defconfig }}
-        if [ -z "$DEF" ]; then
-          DEF=msm-perf_defconfig
-        fi
-        # Ensure we run make with ARCH/CROSS on same command to avoid x86 fallback.
-        echo "Using target defconfig: $DEF"
-        if [ -f "arch/${ARCH}/configs/$DEF" ]; then
-          echo "Found defconfig in arch/${ARCH}/configs"
-        else
-          echo "Defconfig arch/${ARCH}/configs/$DEF not found. Listing available defconfigs:"
-          ls -1 arch/${ARCH}/configs/*_defconfig || true
-          echo "If the expected defconfig is missing, add it to arch/${ARCH}/configs/ or provide the correct name."
-          # continue — let make fail with a clear error
-        fi
-
-        # helper: retry function (1 retry)
-        try_make() {
-          echo "Running: make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE O=$OUT_DIR $1"
-          make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE O=$OUT_DIR $1 && return 0
-          echo "First attempt failed for target '$1', retrying once..."
-          make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE O=$OUT_DIR $1 && return 0
-          return 1
-        }
-
-        # generate .config from defconfig
-        if ! try_make "$DEF"; then
-          echo "ERROR: failed to generate .config from $DEF"
-          exit 1
-        fi
-
-        # ensure new symbols auto-accepted where possible
-        if make -C . O=$OUT_DIR olddefconfig >/dev/null 2>&1; then
-          echo "Applied olddefconfig to accept defaults."
-        else
-          echo "olddefconfig not available or failed; attempting oldconfig with defaults"
-          yes "" | make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE O=$OUT_DIR oldconfig || true
-        fi
-
-        # ensure KernelSU options definitely enabled in the O=build/.config
-        scripts/config --file $OUT_DIR/.config --enable CONFIG_KSU || true
-        scripts/config --file $OUT_DIR/.config --enable CONFIG_KSU_WITH_VFS_HOOKS || true
-
-    - name: Build kernel (with retry)
-      run: |
-        set -e
-        export MAKEFLAGS="-j$(nproc --all)"
-        BUILD_CMD="make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE O=$OUT_DIR"
-        echo "Starting build: $BUILD_CMD -j$(nproc --all)"
-        # run once, if fails try one more time to recover transient failures
-        if $BUILD_CMD -j$(nproc --all); then
-          echo "Build succeeded."
-        else
-          echo "First build attempt failed; retrying once to catch transient failures..."
-          if $BUILD_CMD -j$(nproc --all); then
-            echo "Build succeeded on retry."
-          else
-            echo "Build failed on retry; dumping last 200 lines of build log for debugging"
-            # try to gather some logs (if build emitted to stdout they are in action logs); attempt a helpful grep
-            tail -n 200 $OUT_DIR/Makefile || true
-            exit 1
-          fi
-        fi
-
-    - name: Collect artifacts + helpful info
-      run: |
-        set -e
-        mkdir -p artifacts
-        # Copy kernel image variants that are commonly produced; prefer Image.gz-dtb then Image.gz and Image
-        cp $OUT_DIR/arch/arm64/boot/Image.gz-dtb artifacts/ 2>/dev/null || true
-        cp $OUT_DIR/arch/arm64/boot/Image.gz artifacts/ 2>/dev/null || true
-        cp $OUT_DIR/arch/arm64/boot/Image artifacts/ 2>/dev/null || true
-        cp $OUT_DIR/System.map artifacts/ 2>/dev/null || true
-        cp $OUT_DIR/.config artifacts/.config 2>/dev/null || true
-        # gather dtbs (if any)
-        mkdir -p artifacts/dtbs
-        cp $OUT_DIR/arch/arm64/boot/dts/**/*.dtb artifacts/dtbs/ 2>/dev/null || true || :
-        # create zip if we found at least one image
-        if ls artifacts/*Image* artifacts/*Image.gz* artifacts/*Image.gz-dtb* >/dev/null 2>&1; then
-          zip -r kernel-artifacts.zip artifacts || true
-        else
-          echo "Warning: no kernel image found in $OUT_DIR/arch/arm64/boot/"
-          ls -la $OUT_DIR/arch/arm64/boot || true
-          # still upload whatever we have (e.g., .config)
-          zip -r kernel-artifacts.zip artifacts || true
-        fi
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
       with:
-        name: kernel-artifacts
-        path: kernel-artifacts.zip
-
-    - name: Print summary
-      if: always()
-      run: |
-        echo "Build complete. Summary:"
-        echo "Branch: ${{ github.event.inputs.branch }}"
-        echo "Defconfig used: ${{ inputs.defconfig }}"
-        echo "ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE"
-        echo "Out dir: $OUT_DIR"
-        echo "Artifacts uploaded: kernel-artifacts.zip"
+        name: kernel
+        path: out/kernel.zip
